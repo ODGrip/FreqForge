@@ -389,7 +389,7 @@ module freq_counter_gray #(
 
             if (win_last) begin
                 win_cnt <= {REF_W{1'b0}};
-                if ((bin_sample - bin_prev) > {COUNTER_W-MEAS_W{1'b0}, {MEAS_W{1'b1}}})
+                if ((bin_sample - bin_prev) > {{(COUNTER_W-MEAS_W){1'b0}}, {MEAS_W{1'b1}}})
                     meas_count <= {MEAS_W{1'b1}};
                 else
                     meas_count <= (bin_sample - bin_prev)[MEAS_W-1:0];
