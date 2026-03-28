@@ -1,145 +1,30 @@
-/*
- * Copyright (c) 2024 Your Name
- * SPDX-License-Identifier: Apache-2.0
- */
-
 `default_nettype none
 
-module tt_um_odgrip_freq_forge (
-    input  wire [7:0] ui_in,    // Dedicated inputs
-    output wire [7:0] uo_out,   // Dedicated outputs
-    input  wire [7:0] uio_in,   // IOs: Input path
-    output wire [7:0] uio_out,  // IOs: Output path
-    output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
-    input  wire       ena,      // always 1 when the design is powered
-    input  wire       clk,      // reference clock
-    input  wire       rst_n     // reset_n - low to reset
-);
-
-    // ------------------------------------------------------------------------
-    // Pin mapping for this first all-digital test
-    // ------------------------------------------------------------------------
-    //
-    // ui_in[7:0]   = direct_word[7:0]
-    //
-    // uio_in[1:0]  = mode
-    //                00 = PWM
-    //                01 = direct_word
-    //                10 = I/Q
-    //                11 = manual DCO code
-    //
-    // uio_in[2]    = enable
-    // uio_in[3]    = freeze_fll
-    // uio_in[4]    = pwm_in
-    // uio_in[5]    = i_in[0]
-    // uio_in[6]    = i_in[1]
-    // uio_in[7]    = i_in[2]
-    //
-    // For now:
-    // - q_in is tied to 0
-    // - manual_dco_code is tied to 0
-    // - DCO outputs are stubbed to 0
-    //
-    // uo_out mapping:
-    // uo_out[7]    = lock
-    // uo_out[6]    = sat_hi
-    // uo_out[5]    = sat_lo
-    // uo_out[4]    = meas_valid
-    // uo_out[3:0]  = dco_code_dbg[3:0]
-    // ------------------------------------------------------------------------
-
-    wire [1:0] mode        = uio_in[1:0];
-    wire       core_enable = uio_in[2] & ena;
-    wire       freeze_fll  = uio_in[3];
-    wire       pwm_in      = uio_in[4];
-
-    wire [3:0] i_in = {uio_in[7], uio_in[6], uio_in[5], 1'b0};
-    wire [3:0] q_in = 4'b0000;
-
-    wire [7:0] direct_word     = ui_in;
-    wire [7:0] manual_dco_code = 8'h00;
-
-    // Fixed config for first test
-    wire [7:0] base_count  = 8'd100;
-    wire [7:0] scale_shift = 8'd2;
-    wire [7:0] deadband    = 8'd1;
-    wire [7:0] lock_tol    = 8'd1;
-
-    wire       clk_hf;
-    wire       clk_div;
-    wire [7:0] cmd_value_dbg;
-    wire [7:0] target_count_dbg;
-    wire [7:0] meas_count_dbg;
-    wire [7:0] dco_code_dbg;
-    wire       lock;
-    wire       sat_hi;
-    wire       sat_lo;
-    wire       meas_valid_dbg;
-
-    dco_fm_digital_top u_core (
-        .clk_ref          (clk),
-        .rst_n            (rst_n),
-
-        .enable           (core_enable),
-        .freeze_fll       (freeze_fll),
-        .mode             (mode),
-
-        .pwm_in           (pwm_in),
-        .direct_word      (direct_word),
-        .i_in             (i_in),
-        .q_in             (q_in),
-        .manual_dco_code  (manual_dco_code),
-
-        .base_count       (base_count),
-        .scale_shift      (scale_shift),
-        .deadband         (deadband),
-        .lock_tol         (lock_tol),
-
-        .clk_hf           (clk_hf),
-        .clk_div          (clk_div),
-
-        .cmd_value_dbg    (cmd_value_dbg),
-        .target_count_dbg (target_count_dbg),
-        .meas_count_dbg   (meas_count_dbg),
-        .dco_code_dbg     (dco_code_dbg),
-        .lock             (lock),
-        .sat_hi           (sat_hi),
-        .sat_lo           (sat_lo),
-        .meas_valid_dbg   (meas_valid_dbg)
-    );
-
-    // Debug outputs
-    assign uo_out[7]   = lock;
-    assign uo_out[6]   = sat_hi;
-    assign uo_out[5]   = sat_lo;
-    assign uo_out[4]   = meas_valid_dbg;
-    assign uo_out[3:0] = dco_code_dbg[3:0];
-
-    // All bidirectional pins remain inputs in this first test
-    assign uio_out = 8'h00;
-    assign uio_oe  = 8'h00;
-
-endmodule
-
-
-// ----------------------------------------------------------------------------
-// Digital core from previous step
-// ----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// DCO FM digital wrapper
+//
+// Notes:
+// - This file contains ONLY the digital logic.
+// - The DCO itself is modeled as a black box at the bottom of the file.
+// - Designed to be easy to synthesize and inspect, not to be the final TT top.
+// - All logic runs in clk_ref domain except the asynchronous DCO edge counter.
+// - The async counter is sampled into clk_ref through a Gray-code CDC.
+// -----------------------------------------------------------------------------
 
 module dco_fm_digital_top #(
     parameter integer CMD_W           = 8,
     parameter integer TARGET_W        = 8,
     parameter integer DCO_CODE_W      = 8,
     parameter integer DCO_COUNTER_W   = 16,
-    parameter integer WINDOW_REF_CYC  = 25,
-    parameter integer DIVIDER_BITS    = 4
+    parameter integer WINDOW_REF_CYC  = 25,   // 25 cycles @ 25 MHz = 1 us window
+    parameter integer DIVIDER_BITS    = 4     // clk_div = clk_hf / 2^DIVIDER_BITS
 ) (
     input  wire        clk_ref,
     input  wire        rst_n,
 
     input  wire        enable,
     input  wire        freeze_fll,
-    input  wire [1:0]  mode,
+    input  wire [1:0]  mode,          // 00: PWM, 01: direct, 10: IQ, 11: manual
 
     input  wire        pwm_in,
     input  wire [7:0]  direct_word,
@@ -147,14 +32,17 @@ module dco_fm_digital_top #(
     input  wire [3:0]  q_in,
     input  wire [7:0]  manual_dco_code,
 
-    input  wire [7:0]  base_count,
-    input  wire [7:0]  scale_shift,
+    // Config knobs
+    input  wire [7:0]  base_count,    // nominal target count per window
+    input  wire [7:0]  scale_shift,   // only low 3 bits used
     input  wire [7:0]  deadband,
     input  wire [7:0]  lock_tol,
 
+    // DCO outputs
     output wire        clk_hf,
     output wire        clk_div,
 
+    // Status/debug
     output wire [7:0]  cmd_value_dbg,
     output wire [7:0]  target_count_dbg,
     output wire [7:0]  meas_count_dbg,
@@ -222,10 +110,10 @@ module dco_fm_digital_top #(
         .CMD_W   (CMD_W),
         .TARGET_W(TARGET_W)
     ) u_command_generator (
-        .cmd_value    (cmd_value),
-        .base_count   (base_count),
-        .scale_shift  (scale_shift[2:0]),
-        .target_count (target_count)
+        .cmd_value   (cmd_value),
+        .base_count  (base_count),
+        .scale_shift (scale_shift[2:0]),
+        .target_count(target_count)
     );
 
     freq_counter_gray #(
@@ -262,7 +150,7 @@ module dco_fm_digital_top #(
         .sat_lo          (sat_lo)
     );
 
-    dco_blackbox_stub #(
+    dco_blackbox #(
         .CODE_W       (DCO_CODE_W),
         .DIVIDER_BITS (DIVIDER_BITS)
     ) u_dco_blackbox (
@@ -274,6 +162,9 @@ module dco_fm_digital_top #(
 
 endmodule
 
+// -----------------------------------------------------------------------------
+// Mode mux
+// -----------------------------------------------------------------------------
 module mode_mux #(
     parameter integer W = 8
 ) (
@@ -295,6 +186,9 @@ module mode_mux #(
     end
 endmodule
 
+// -----------------------------------------------------------------------------
+// Direct decoder: pass-through
+// -----------------------------------------------------------------------------
 module direct_decoder #(
     parameter integer W = 8
 ) (
@@ -304,17 +198,23 @@ module direct_decoder #(
     assign cmd_value = direct_word;
 endmodule
 
+// -----------------------------------------------------------------------------
+// PWM decoder
+//
+// Measures how many clk_ref cycles pwm_in is high inside a fixed reference window.
+// Exposes that high-count scaled to 0..255.
+// -----------------------------------------------------------------------------
 module pwm_decoder #(
     parameter integer OUT_W          = 8,
     parameter integer WINDOW_REF_CYC = 25
 ) (
-    input  wire            clk_ref,
-    input  wire            rst_n,
-    input  wire            enable,
-    input  wire            pwm_in,
-    output reg [OUT_W-1:0] pwm_value
+    input  wire             clk_ref,
+    input  wire             rst_n,
+    input  wire             enable,
+    input  wire             pwm_in,
+    output reg [OUT_W-1:0]  pwm_value
 );
-    localparam integer CNT_W = 8;
+    localparam integer CNT_W = clog2(WINDOW_REF_CYC + 1);
 
     reg [CNT_W-1:0] ref_cnt;
     reg [CNT_W-1:0] high_cnt;
@@ -323,27 +223,36 @@ module pwm_decoder #(
 
     always @(posedge clk_ref or negedge rst_n) begin
         if (!rst_n) begin
-            ref_cnt   <= 0;
-            high_cnt  <= 0;
-            pwm_value <= 0;
+            ref_cnt    <= {CNT_W{1'b0}};
+            high_cnt   <= {CNT_W{1'b0}};
+            pwm_value  <= {OUT_W{1'b0}};
         end else if (!enable) begin
-            ref_cnt   <= 0;
-            high_cnt  <= 0;
-            pwm_value <= 0;
+            ref_cnt    <= {CNT_W{1'b0}};
+            high_cnt   <= {CNT_W{1'b0}};
+            pwm_value  <= {OUT_W{1'b0}};
         end else begin
             if (window_last) begin
-                pwm_value <= (high_cnt * 8'd255) / WINDOW_REF_CYC;
-                ref_cnt   <= 0;
-                high_cnt  <= pwm_in ? 8'd1 : 8'd0;
+                // pwm_value ~= high_cnt / WINDOW_REF_CYC * 255
+                pwm_value <= (high_cnt * ((1 << OUT_W) - 1)) / WINDOW_REF_CYC;
+                ref_cnt   <= {CNT_W{1'b0}};
+                high_cnt  <= pwm_in ? {{(CNT_W-1){1'b0}},1'b1} : {CNT_W{1'b0}};
             end else begin
-                ref_cnt <= ref_cnt + 8'd1;
+                ref_cnt <= ref_cnt + {{(CNT_W-1){1'b0}},1'b1};
                 if (pwm_in)
-                    high_cnt <= high_cnt + 8'd1;
+                    high_cnt <= high_cnt + {{(CNT_W-1){1'b0}},1'b1};
             end
         end
     end
 endmodule
 
+// -----------------------------------------------------------------------------
+// IQ decoder
+//
+// Treats I and Q as signed 4-bit two's-complement values.
+// Uses an approximate vector magnitude:
+//   mag = max(|I|,|Q|) + min(|I|,|Q|)/2
+// Then maps to unsigned command 0..255 by left-shifting.
+// -----------------------------------------------------------------------------
 module iq_decoder #(
     parameter integer OUT_W = 8
 ) (
@@ -360,11 +269,19 @@ module iq_decoder #(
     wire [3:0] max_v = (abs_i >= abs_q) ? abs_i : abs_q;
     wire [3:0] min_v = (abs_i >= abs_q) ? abs_q : abs_i;
     wire [4:0] mag   = {1'b0, max_v} + ({1'b0, min_v} >> 1);
-    wire [8:0] scaled = mag * 9'd23;
 
+    // Scale 0..11 roughly into 0..255. Using *23 keeps it simple and synthesizable.
+    wire [8:0] scaled = mag * 9'd23;
     assign cmd_value = scaled[OUT_W-1:0];
 endmodule
 
+// -----------------------------------------------------------------------------
+// Command generator
+//
+// Generates target_count = base_count + signed_delta.
+// cmd_value is interpreted as unsigned centered around 128.
+// scale_shift selects power-of-two scaling of the centered command.
+// -----------------------------------------------------------------------------
 module command_generator #(
     parameter integer CMD_W    = 8,
     parameter integer TARGET_W = 8
@@ -374,12 +291,12 @@ module command_generator #(
     input  wire [2:0]          scale_shift,
     output reg  [TARGET_W-1:0] target_count
 );
-    reg signed [8:0] centered;
-    reg signed [8:0] delta;
-    reg signed [8:0] sum_ext;
+    reg signed [CMD_W:0] centered;
+    reg signed [CMD_W:0] delta;
+    reg signed [TARGET_W:0] sum_ext;
 
     always @* begin
-        centered = $signed({1'b0, cmd_value}) - 9'sd128;
+        centered = $signed({1'b0, cmd_value}) - $signed({1'b0, {1'b1, {(CMD_W-1){1'b0}}}});
 
         case (scale_shift)
             3'd0: delta = centered;
@@ -390,17 +307,24 @@ module command_generator #(
             default: delta = centered >>> 2;
         endcase
 
-        sum_ext = $signed({1'b0, base_count}) + delta;
+        sum_ext = $signed({1'b0, base_count}) + $signed(delta[TARGET_W:0]);
 
         if (sum_ext < 0)
-            target_count = 0;
-        else if (sum_ext > 9'sd255)
-            target_count = 8'hFF;
+            target_count = {TARGET_W{1'b0}};
+        else if (sum_ext > $signed({1'b0, {TARGET_W{1'b1}}}))
+            target_count = {TARGET_W{1'b1}};
         else
-            target_count = sum_ext[7:0];
+            target_count = sum_ext[TARGET_W-1:0];
     end
 endmodule
 
+// -----------------------------------------------------------------------------
+// Frequency counter using Gray-code CDC
+//
+// Asynchronous domain: free-running counter on clk_async
+// Reference domain: samples Gray-coded count, converts to binary, subtracts two
+// snapshots taken WINDOW_REF_CYC cycles apart.
+// -----------------------------------------------------------------------------
 module freq_counter_gray #(
     parameter integer COUNTER_W      = 16,
     parameter integer WINDOW_REF_CYC = 25,
@@ -413,30 +337,33 @@ module freq_counter_gray #(
     output reg  [MEAS_W-1:0] meas_count,
     output reg               meas_valid
 );
-    reg  [COUNTER_W-1:0] async_bin;
-    wire [COUNTER_W-1:0] async_gray = (async_bin >> 1) ^ async_bin;
+    localparam integer REF_W = clog2(WINDOW_REF_CYC + 1);
 
-    reg [COUNTER_W-1:0] gray_sync_1;
-    reg [COUNTER_W-1:0] gray_sync_2;
-    reg [COUNTER_W-1:0] bin_sample;
-    reg [COUNTER_W-1:0] bin_prev;
-    reg [7:0]           win_cnt;
+    wire [COUNTER_W-1:0] async_bin;
+    wire [COUNTER_W-1:0] async_gray;
 
-    wire window_last = (win_cnt == WINDOW_REF_CYC-1);
+    reg  [COUNTER_W-1:0] gray_sync_1;
+    reg  [COUNTER_W-1:0] gray_sync_2;
+    reg  [COUNTER_W-1:0] bin_sample;
+    reg  [COUNTER_W-1:0] bin_prev;
+    reg  [REF_W-1:0]     win_cnt;
 
-    always @(posedge clk_async or negedge rst_n) begin
-        if (!rst_n)
-            async_bin <= 0;
-        else if (!enable)
-            async_bin <= 0;
-        else
-            async_bin <= async_bin + 1'b1;
-    end
+    wire win_last = (win_cnt == WINDOW_REF_CYC-1);
+
+    gray_counter_async #(
+        .W(COUNTER_W)
+    ) u_gray_counter_async (
+        .clk_async (clk_async),
+        .rst_n     (rst_n),
+        .enable    (enable),
+        .bin_count (async_bin),
+        .gray_count(async_gray)
+    );
 
     always @(posedge clk_ref or negedge rst_n) begin
         if (!rst_n) begin
-            gray_sync_1 <= 0;
-            gray_sync_2 <= 0;
+            gray_sync_1 <= {COUNTER_W{1'b0}};
+            gray_sync_2 <= {COUNTER_W{1'b0}};
         end else begin
             gray_sync_1 <= async_gray;
             gray_sync_2 <= gray_sync_1;
@@ -445,31 +372,31 @@ module freq_counter_gray #(
 
     always @(posedge clk_ref or negedge rst_n) begin
         if (!rst_n) begin
-            bin_sample  <= 0;
-            bin_prev    <= 0;
-            win_cnt     <= 0;
-            meas_count  <= 0;
+            bin_sample  <= {COUNTER_W{1'b0}};
+            bin_prev    <= {COUNTER_W{1'b0}};
+            win_cnt     <= {REF_W{1'b0}};
+            meas_count  <= {MEAS_W{1'b0}};
             meas_valid  <= 1'b0;
         end else if (!enable) begin
-            bin_sample  <= 0;
-            bin_prev    <= 0;
-            win_cnt     <= 0;
-            meas_count  <= 0;
+            bin_sample  <= {COUNTER_W{1'b0}};
+            bin_prev    <= {COUNTER_W{1'b0}};
+            win_cnt     <= {REF_W{1'b0}};
+            meas_count  <= {MEAS_W{1'b0}};
             meas_valid  <= 1'b0;
         end else begin
             bin_sample <= gray2bin(gray_sync_2);
             meas_valid <= 1'b0;
 
-            if (window_last) begin
-                win_cnt <= 0;
-                if ((bin_sample - bin_prev) > 16'd255)
-                    meas_count <= 8'hFF;
+            if (win_last) begin
+                win_cnt <= {REF_W{1'b0}};
+                if ((bin_sample - bin_prev) > {COUNTER_W-MEAS_W{1'b0}, {MEAS_W{1'b1}}})
+                    meas_count <= {MEAS_W{1'b1}};
                 else
-                    meas_count <= (bin_sample - bin_prev)[7:0];
+                    meas_count <= (bin_sample - bin_prev)[MEAS_W-1:0];
                 bin_prev   <= bin_sample;
                 meas_valid <= 1'b1;
             end else begin
-                win_cnt <= win_cnt + 1'b1;
+                win_cnt <= win_cnt + {{(REF_W-1){1'b0}},1'b1};
             end
         end
     end
@@ -485,6 +412,37 @@ module freq_counter_gray #(
     endfunction
 endmodule
 
+// -----------------------------------------------------------------------------
+// Async Gray counter
+// -----------------------------------------------------------------------------
+module gray_counter_async #(
+    parameter integer W = 16
+) (
+    input  wire         clk_async,
+    input  wire         rst_n,
+    input  wire         enable,
+    output reg [W-1:0]  bin_count,
+    output wire [W-1:0] gray_count
+);
+    assign gray_count = (bin_count >> 1) ^ bin_count;
+
+    always @(posedge clk_async or negedge rst_n) begin
+        if (!rst_n)
+            bin_count <= {W{1'b0}};
+        else if (!enable)
+            bin_count <= {W{1'b0}};
+        else
+            bin_count <= bin_count + {{(W-1){1'b0}},1'b1};
+    end
+endmodule
+
+// -----------------------------------------------------------------------------
+// FLL controller
+//
+// Manual mode bypasses the loop and drives dco_code directly.
+// Otherwise, on each meas_valid pulse, it compares target_count to meas_count and
+// steps the code up/down.
+// -----------------------------------------------------------------------------
 module fll_controller #(
     parameter integer MEAS_W     = 8,
     parameter integer DCO_CODE_W = 8
@@ -505,18 +463,17 @@ module fll_controller #(
     output reg                   sat_hi,
     output reg                   sat_lo
 );
-    reg signed [8:0] error_s;
+    reg signed [MEAS_W:0] error_s;
     reg [DCO_CODE_W-1:0] step;
-    reg [8:0] abs_error;
 
     always @(posedge clk_ref or negedge rst_n) begin
         if (!rst_n) begin
-            dco_code <= 8'h80;
+            dco_code <= {1'b1, {(DCO_CODE_W-1){1'b0}}}; // mid-scale
             lock     <= 1'b0;
             sat_hi   <= 1'b0;
             sat_lo   <= 1'b0;
         end else if (!enable) begin
-            dco_code <= 8'h80;
+            dco_code <= {1'b1, {(DCO_CODE_W-1){1'b0}}};
             lock     <= 1'b0;
             sat_hi   <= 1'b0;
             sat_lo   <= 1'b0;
@@ -527,30 +484,33 @@ module fll_controller #(
             sat_lo   <= 1'b0;
         end else if (meas_valid) begin
             error_s = $signed({1'b0, target_count}) - $signed({1'b0, meas_count});
-            abs_error = error_s[8] ? -error_s : error_s;
 
-            lock   <= (abs_error <= {1'b0, lock_tol});
+            if ((error_s < 0 ? -error_s : error_s) <= $signed({1'b0, lock_tol}))
+                lock <= 1'b1;
+            else
+                lock <= 1'b0;
+
             sat_hi <= 1'b0;
             sat_lo <= 1'b0;
 
             if (!freeze_fll) begin
-                if (abs_error > ({1'b0, deadband} + 9'd8))
-                    step = 8'd4;
-                else if (abs_error > ({1'b0, deadband} + 9'd2))
-                    step = 8'd2;
+                if ((error_s > 0 ? error_s : -error_s) > $signed({1'b0, deadband}) + 8'd8)
+                    step = {{(DCO_CODE_W-3){1'b0}}, 3'd4};
+                else if ((error_s > 0 ? error_s : -error_s) > $signed({1'b0, deadband}) + 8'd2)
+                    step = {{(DCO_CODE_W-2){1'b0}}, 2'd2};
                 else
-                    step = 8'd1;
+                    step = {{(DCO_CODE_W-1){1'b0}}, 1'b1};
 
                 if (error_s > $signed({1'b0, deadband})) begin
-                    if (dco_code >= (8'hFF - step)) begin
-                        dco_code <= 8'hFF;
+                    if (dco_code >= ({DCO_CODE_W{1'b1}} - step)) begin
+                        dco_code <= {DCO_CODE_W{1'b1}};
                         sat_hi   <= 1'b1;
                     end else begin
                         dco_code <= dco_code + step;
                     end
                 end else if (error_s < -$signed({1'b0, deadband})) begin
                     if (dco_code <= step) begin
-                        dco_code <= 8'h00;
+                        dco_code <= {DCO_CODE_W{1'b0}};
                         sat_lo   <= 1'b1;
                     end else begin
                         dco_code <= dco_code - step;
@@ -561,9 +521,30 @@ module fll_controller #(
     end
 endmodule
 
-// Stub sintetizzabile per il primo test.
-// DCO "spento": tutte le uscite a zero.
-module dco_blackbox_stub #(
+// -----------------------------------------------------------------------------
+// Utility function: ceil(log2(n))
+// -----------------------------------------------------------------------------
+function integer clog2;
+    input integer value;
+    integer tmp;
+    begin
+        tmp = value - 1;
+        clog2 = 0;
+        while (tmp > 0) begin
+            tmp = tmp >> 1;
+            clog2 = clog2 + 1;
+        end
+    end
+endfunction
+
+// -----------------------------------------------------------------------------
+// DCO black box
+//
+// Replace with the real custom oscillator in the actual project.
+// For synthesis sanity checks, you can keep this as an empty black box, or swap
+// it with a synthesizable stub if your tool dislikes unknown cells.
+// -----------------------------------------------------------------------------
+module dco_blackbox #(
     parameter integer CODE_W = 8,
     parameter integer DIVIDER_BITS = 4
 ) (
@@ -572,10 +553,7 @@ module dco_blackbox_stub #(
     output wire              clk_hf,
     output wire              clk_div
 );
-    assign clk_hf  = 1'b0;
-    assign clk_div = 1'b0;
-
-    wire _unused = &{enable, dco_code, DIVIDER_BITS[0], 1'b0};
+    // synthesis syn_black_box
 endmodule
 
 `default_nettype wire
