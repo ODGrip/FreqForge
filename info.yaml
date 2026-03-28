@@ -1,11 +1,11 @@
 # Tiny Tapeout project information
 project:
-  title:        ""      # Project title
-  author:       ""      # Your name
-  discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  ""      # One line description of what your project does
+  title:        "FreqForge"      # Project title
+  author:       "Riccardo Pellegrini"      # Your name
+  discord:      "odgrip"      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
+  description:  "A flexible digital frequency modulation engine that converts PWM, digital, or I/Q inputs into a ~100 MHz modulated clock using a DCO and a digital FLL"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
-  clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
+  clock_hz:     50000000       # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
   tiles: "1x1"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
@@ -24,34 +24,34 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: ""
-  ui[1]: ""
-  ui[2]: ""
-  ui[3]: ""
-  ui[4]: ""
-  ui[5]: ""
-  ui[6]: ""
-  ui[7]: ""
+  ui[0]: "DATA_0"
+  ui[1]: "DATA_1"
+  ui[2]: "DATA_2"
+  ui[3]: "DATA_3"
+  ui[4]: "DATA_4"
+  ui[5]: "DATA_5"
+  ui[6]: "DATA_6"
+  ui[7]: "DATA_7"
 
   # Outputs
-  uo[0]: ""
-  uo[1]: ""
-  uo[2]: ""
-  uo[3]: ""
-  uo[4]: ""
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  uo[0]: "CLK_OUT"
+  uo[1]: "DCO_CODE_0"
+  uo[2]: "DCO_CODE_1"
+  uo[3]: "DCO_CODE_2"
+  uo[4]: "MEAS_VALID"
+  uo[5]: "SAT_LO"
+  uo[6]: "SAT_HI"
+  uo[7]: "LOCK"
 
   # Bidirectional pins
-  uio[0]: ""
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  uio[0]: "MODE_0"
+  uio[1]: "MODE_1"
+  uio[2]: "ENABLE"
+  uio[3]: "FREEZE_FLL"
+  uio[4]: "PWM_IN"
+  uio[5]: "I_IN_0"
+  uio[6]: "I_IN_1"
+  uio[7]: "I_IN_2"
 
 # Do not change!
 yaml_version: 6
